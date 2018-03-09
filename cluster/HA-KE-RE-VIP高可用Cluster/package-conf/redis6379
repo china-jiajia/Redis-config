@@ -1,0 +1,70 @@
+#!/bin/sh
+#
+#chkconfig: 2345 80 90
+# Simple Redis init.d script conceived to work on Linux systems
+# as it does use of the /proc filesystem.
+REDISPORT=6379
+EXEC=/usr/local/bin/redis-server
+CLIEXEC=/usr/local/bin/redis-cli
+HOSTIP=`ifconfig bond0|awk -F ":" 'NR==2{print $2}'|awk '{print $1}'`
+PIDFILE=/opt/redis/data/${REDISPORT}.conf
+TPID=/opt/redis/tmp/${REDISPORT}.pid
+CONF="/opt/redis/conf/${REDISPORT}.conf"
+PASSWD=123456
+source /etc/init.d/functions
+
+start() {
+if [ -f $TPID ]
+then
+echo "$PIDFILE exists, process is already running or crashed"
+else
+echo "Starting Redis server..."
+$EXEC $CONF
+touch $TPID && echo "$REDISPORT" >$TPID
+fi
+}
+
+stop() {
+if [ ! -f $TPID ];then
+	echo "$TPID does not exist, process is not running"
+else
+	echo "Stopping ..."
+	$CLIEXEC -h $HOSTIP -p $REDISPORT -a $PASSWD shutdown &&
+	rm $TPID -rf
+	echo "Redis stopped"
+fi
+}
+
+status() {
+if [ -f $TPID ] && netstat -tnl | grep $REDISPORT &>/dev/null
+then
+echo "`basename $0` is running,PID is `cat $TPID`"
+else
+echo "`basename $0` is stopped."
+fi
+
+}
+restart() {
+stop
+start
+}
+
+case "$1" in
+	start)
+	start
+	;;
+	stop)
+	stop
+	;;
+	status)
+	status
+	;;
+	restart)
+	restart
+	;;
+	*)
+#	echo "Usage: service `basename $0` {start|stop|status|restart}"
+	echo -e  "\033[32mUsage: service `basename $0` {start|stop|status|restart}\033[0m"
+	exit 2
+	;;
+esac

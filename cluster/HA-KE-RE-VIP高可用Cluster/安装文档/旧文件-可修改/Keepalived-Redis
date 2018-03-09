@@ -1,0 +1,128 @@
+
+一、安装Keepalived(基于layer3, 4 & 5交换机制的软件)-基于Redis
+1.主节点安装配置keepalived(10.96.28.135)
+yum install -y keepalived
+
+
+vim /etc/keepalived/keepalived.conf
+
+
+! Configuration File for keepalived
+ global_defs { router_id redis44
+}
+vrrp_script chk_redis {
+	script "/etc/keepalived/scripts/redis_check.sh 127.0.0.1 6379 123456"
+	interval 2 
+	timeout 2 
+	fall 3
+}
+
+vrrp_instance redis { 
+	state BACKUP
+	interface bond0 
+	virtual_router_id 51 
+	priority 100
+	nopreempt 
+	advert_int 1 
+	authentication {
+		auth_type PASS
+		auth_pass 1111
+}
+
+virtual_ipaddress {
+	10.96.28.140
+} 
+
+track_script {
+	chk_redis
+	} 
+}
+
+
+mkdir -pv /etc/keepalived/scripts
+mkdir -pv /var/log/redis/
+vim /etc/keepalived/scripts/redis_check.sh
+
+#!/bin/bash
+#
+#chkconfig: 2345 80 90
+ALIVE=`/usr/bin/redis-cli -h $1 -p $2 -a $3 PING`
+LOGFILE="/var/log/redis/keepalived-redis-check.log"
+source /etc/init.d/functions
+
+echo "[CHECK]" >> $LOGFILE
+date >> $LOGFILE
+if [ $ALIVE == "PONG" ];then
+	echo "Success: redis-cli -h $1 -p $2 -a no PING $ALIVE" >> $LOGFILE 2>&1 exit 0
+else
+	echo "Failed:redis-cli -h $1 -p $2 -a no PING $ALIVE " >> $LOGFILE 2>&1 exit 1
+fi
+
+dos2unix /etc/keepalived/scripts/redis_check.sh
+chmod +x /etc/keepalived/scripts/redis_check.sh
+
+/etc/init.d/keepalived start
+
+
+2.从节点安装配置keepalived(10.96.28.136)
+yum install -y keepalived
+
+vim /etc/keepalived/keepalived.conf
+
+! Configuration File for keepalived
+ global_defs { router_id redis44
+}
+vrrp_script chk_redis {
+	script "/etc/keepalived/scripts/redis_check.sh 127.0.0.1 6379 123456"
+	interval 2 
+	timeout 2 
+	fall 3
+}
+
+vrrp_instance redis { 
+	state BACKUP
+	interface bond0 
+	virtual_router_id 51 
+	priority 90
+	nopreempt 
+	advert_int 1 
+	authentication {
+		auth_type PASS
+		auth_pass 1111
+}
+
+virtual_ipaddress {
+	10.96.28.140
+} 
+track_script {
+	chk_redis
+	} 
+}
+
+
+mkdir -pv /etc/keepalived/scripts
+mkdir -pv /var/log/redis/
+vim /etc/keepalived/scripts/redis_check.sh 
+
+#!/bin/bash
+#
+#chkconfig: 2345 80 90
+ALIVE=`/usr/bin/redis-cli -h $1 -p $2 -a $3 PING`
+LOGFILE="/var/log/redis/keepalived-redis-check.log"
+source /etc/init.d/functions
+
+echo "[CHECK]" >> $LOGFILE
+date >> $LOGFILE
+if [ $ALIVE == "PONG" ];then
+	echo "Success: redis-cli -h $1 -p $2 -a no PING $ALIVE" >> $LOGFILE 2>&1 exit 0
+else
+	echo "Failed:redis-cli -h $1 -p $2 -a no PING $ALIVE " >> $LOGFILE 2>&1 exit 1
+fi
+
+
+dos2unix /etc/keepalived/scripts/redis_check.sh
+chmod +x /etc/keepalived/scripts/redis_check.sh
+
+
+/etc/init.d/keepalived start
+

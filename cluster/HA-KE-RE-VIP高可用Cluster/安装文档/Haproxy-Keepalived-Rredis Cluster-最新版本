@@ -1,0 +1,408 @@
+
+一、Redis Cluster 安装前准备
+1.centos上安装访问redis的python客户端 
+yum install epel-release
+yum install -y python-pip 
+pip install redis
+
+
+2.centos 使用python访问redis 
+# python
+import redis
+conn = redis.Redis(host='127.0.0.1',port=6379) 
+conn.set('name1','test')
+True
+
+conn.get('name')
+'junxi'
+
+
+
+3.源码安装单节点redis
+yum install -y gcc make
+curl -O http://download.redis.io/releases/redis-4.0.8.tar.gz 
+tar -zxvf redis-4.0.8.tar.gz
+cd redis-4.0.8
+make install
+mkdir -pv /opt/redis/{logs,data,tmp,conf}
+cp redis.conf  sentinel.conf  /opt/redis/conf/
+
+
+二、Redis Cluster安装
+(1)、更新GCC
+wget http://people.centos.org/tru/devtools-2/devtools-2.repo
+mv devtools-2.repo /etc/yum.repos.d
+yum install devtoolset-2-gcc devtoolset-2-binutils devtoolset-2-gcc-c++
+
+
+mv /usr/bin/gcc /usr/bin/gcc-4.4.7
+mv /usr/bin/g++ /usr/bin/g++-4.4.7
+mv /usr/bin/c++ /usr/bin/c++-4.4.7
+ln -s /opt/rh/devtoolset-2/root/usr/bin/gcc /usr/bin/gcc
+ln -s /opt/rh/devtoolset-2/root/usr/bin/c++ /usr/bin/c++
+ln -s /opt/rh/devtoolset-2/root/usr/bin/g++ /usr/bin/g++
+
+gcc --version
+
+
+(2)、安装ruby:
+
+     tar xf ruby-2.5.0.tar.gz
+     cd ruby-2.5.0.tar.gz
+     ./configure && make && make install && echo $?
+
+#添加ruby源
+    gem sources -l
+    gem sources --add http://gems.ruby-china.org/ --remove https://rubygems.org/
+
+
+(3)、安装redis-4.0.8.tar.gz 
+
+    tar xf redis-4.0.8.tar.gz  
+    cd redis-4.0.8
+    make && make install && echo $?
+
+    cp redis-4.0.8/src/redis-trib.rb /usr/local/bin/
+    cp /usr/local/bin/redis-* /usr/bin/
+
+	#创建实例目录
+	mkdir -pv /opt/redis/{logs,data,tmp,conf}
+	mkdir -pv /opt/redis1/{logs,data,tmp,conf}
+
+	#修改redis.conf 配置文件(配置文件大部分内容都相同,需要修改存储路径和守护端口号)
+	vim /opt/redis/conf/6379.conf
+
+cat >/opt/redis/conf/6379.conf<<-EOF
+bind 0.0.0.0
+dir /opt/redis/data
+port 6379
+daemonize yes
+appendonly yes 
+requirepass 123456
+masterauth 123456
+logfile "/opt/redis/logs/6379.log"
+cluster-enabled yes
+cluster-config-file 6379.conf 
+cluster-node-timeout 5000 
+cluster-require-full-coverage no
+cluster-slave-validity-factor 10
+cluster-migration-barrier 1
+cluster-require-full-coverage yes
+EOF
+
+#/etc/init.d/redis6379 start|status|stop|restart    (启动脚本)
+
+
+
+
+
+(4)、创建集群:
+redis-trib.rb create --replicas 1 10.96.28.135:6379 10.96.28.135:6380 10.96.28.136:6379 10.96.28.136:6380 10.96.28.137:6379 10.96.28.137:6380
+
+(5)、集群信息操作
+    #集群状态查看:
+    redis-trib.rb check 10.96.28.135:6379
+
+    #列出集群节点:
+    redis-cli -c -h 10.96.28.135 -p 6379 cluster nodes
+
+    #打印集群信息:
+    redis-cli -c -h 10.96.28.135 -p 6379 cluster info
+
+    #连接单个redis节点:
+    redis-cli -c -h 10.96.28.135 -p 6379 
+
+    #写100个数据观查三个节点上的分布情况:(正常情况下数据会分批写入不通的master上)
+    for ((i=0; i<100; ++i)); do redis-cli -c -h 172.26.0.20 -p 7000 set zst$i "The Best MySQL edu at
+zhishutang.com :)" ; done
+
+
+
+(6)、集群日常维护操作
+    1.集群节点启动或停止:
+    参考start.sh、stop.sh 如果停止不行就kill。
+
+
+(7).节点管理:
+    例如添加一个节:
+    redis-trib.rb add-node ip:port 10.96.28.135:6380  #添加节点分成添加主节点和从节点,节点最好是空的;第二个节点是集群里成员(表示加入的集群的一个节点，用来辨认是哪个集群)。
+
+    如添加一个主节点到集群:(默认添加的节点为Master)
+    redis-trib.rb add-node 10.96.28.135:6379 10.96.28.135:6380
+
+    添加一个从节点不指定是谁的从:(redis机制自动分配；那个master下面没有slave就会分配给谁):
+    redis-trib.rb  add-node --slave 10.96.28.135:6381 10.96.28.135:6379
+
+    添加从节节点(指定Master):
+    redis-trib.rb  add-node --slave --master-id c8e10988b65613c33dab6593e3472888d819c97e 10.96.28.135:6381 10.96.28.135:6379
+    #说明: 指定Master添加从节点；"--master-id"为Master 在Cluster当中的ID 序列号，后面跟随的"10.96.28.135:6379"节点信息可以随意但是必须为一同集群节点
+
+    移除节点:
+    redis-trib.rb del-node 10.96.28.135:6381 'node-id' 如:redis-trib.rb del-node 10.96.28.135:6379' 3c3a0c74aae0b56170ccb03a76b60cfe7dc1912e'
+    redis-trib.rb  del-node 10.96.28.135:6381 'fbc4ac8ec3ba8fdc284d87da02868e0e26ab2511'     #移除节点操作，同时也会把移除的节点关闭
+
+
+    3.reshard分配数据
+    redis-trib.rb reshard 10.96.28.135:6381
+        1.根据有几个主从信息来计算要分配的slot的数据量(16384/4)
+        2.两种均衡slot的方式：指定node节点上的slot来分配给新的node；从全部节点上均衡分配slot
+
+        3. Slot管理
+        数据重新平衡 新加入节点后,需要做数据平衡
+        redis-trib.rb reshard 10.96.28.135:6381
+        Step1 : 提示数据向那个节点平衡提供相应主节点的node-id 
+        Step2 : 指定移走多少Slot
+        Step3 : 指定多那个master上移走,提供node-id
+        Step4 : 输出done
+        Step5 : 确认 yes 迁移开始
+
+        #需要注意: 第一个连接节点是任何 个Redis都可以，后面的node-id是节点的id, 对主节点如果需要移除,需
+        #提示: reshard 提供的可以把指定的节点上的Slot迁到指定节点,如果需要数据平衡,需要考 虑使用rebalance参数,如:** redis-trib.rb rebalance 10.96.28.135:6381**
+
+    4.故障转移 可以偿试把一组机器里的一个节点关掉试试,或是整个Group里的成员全部关掉。测试一下。
+
+
+(8)、集群命令参考:
+    语法格式:
+    redis-cli -c -p port
+
+    集群:
+    cluster info  ：打印集群的信息
+    cluster nodes ：列出集群当前已知的所有节点（ node），以及这些节点的相关信息。
+
+    节点:
+    cluster meet <ip> <port>     ：将 ip 和 port 所指定的节点添加到集群当中，让它成为集群的一份子。
+    cluster forget <node_id>     ：从集群中移除 node_id 指定的节点。
+    cluster replicate <node_id> ：将当前节点设置为 node_id 指定的节点的从节点。
+    cluster saveconfig ：将节点的配置文件保存到硬盘里面。
+
+    槽(slot):
+    cluster addslots <slot> [slot ...]             ：将一个或多个槽（ slot）指派（ assign）给当前节点。
+    cluster delslots <slot> [slot ...]             ：移除一个或多个槽对当前节点的指派。
+    cluster flushslots                             ：移除指派给当前节点的所有槽，让当前节点变成一个没有指派任何槽的节点。
+    cluster setslot <slot> node <node_id>         ：将槽 slot 指派给 node_id 指定的节点，如果槽已经指派给另一个节点，那么先让另一个节点删除该槽>，然后再进行指派。
+    cluster setslot <slot> migrating <node_id>  ：将本节点的槽 slot 迁移到 node_id 指定的节点中。
+    cluster setslot <slot> importing <node_id>  ：从 node_id 指定的节点中导入槽 slot 到本节点。
+    cluster setslot <slot> stable                 ：取消对槽 slot 的导入（ import）或者迁移（ migrate）。
+
+    键:
+    cluster keyslot <key>                      ：计算键 key 应该被放置在哪个槽上。
+    cluster countkeysinslot <slot>             ：返回槽 slot 目前包含的键值对数量。
+    cluster getkeysinslot <slot> <count>     ：返回 count 个 slot 槽中的键 。
+
+
+
+三、安装配置Haproxy
+1.安装HAproxy
+tar xf haproxy-1.7.0.tar.gz
+cd haproxy-1.7.0
+make TARGET=linux26 PREFIX=/usr/local/haproxy                                
+make install PREFIX=/usr/local/haproxy 		#将haproxy安装到/usr/local/haproxy
+
+2.配置HAproxy
+mkdir -pv /usr/local/haproxy/{conf,tmp}
+vim /usr/local/haproxy/conf/haproxy.cfg
+
+global
+    log 		127.0.0.1 local0
+    maxconn 	3000
+    chroot 		/usr/local/haproxy
+    uid 		99
+    gid 		99
+    daemon
+    quiet
+    nbproc 		1
+    pidfile 	/usr/local/haproxy/tmp/haproxy.pid
+
+defaults
+    log     	global
+    mode   		http
+    option  	httplog
+    option  	dontlognull
+    log 		127.0.0.1 local3 info
+    retries 	3
+    option 		redispatch
+    maxconn 	4096
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         5000ms
+    timeout client          50000ms
+    timeout server          50000ms
+    timeout http-keep-alive 10s
+    timeout check           10s
+
+
+listen cluster
+   bind 0.0.0.0:6381
+   mode tcp
+   balance roundrobin
+   option forwardfor
+   server redism1 10.96.28.135 check port 6379 inter 2s rise 3 fall 3 weight 1
+   server redism2 10.96.28.136 check port 6379 inter 2s rise 3 fall 3 weight 1
+   server redism3 10.96.28.137 check port 6379 inter 2s rise 3 fall 3 weight 1
+
+listen localhost
+   bind 0.0.0.0:8888
+   mode http
+   transparent
+   stats refresh 10s
+   stats uri /haproxyadmin
+   stats realm Haproxy \ statistic
+   stats auth admin:123456
+   stats hide-version
+
+
+
+3.加上日志支持
+vim /etc/rsyslog.conf
+local3.*         /var/log/haproxy.log
+local0.*         /var/log/haproxy.log
+
+vim /etc/sysconfig/rsyslog 
+修改： SYSLOGD_OPTIONS="-r -m 0"  
+service rsyslog restart
+
+4.haproxy启动脚本
+/etc/init.d/haproxy 		Usage: haproxy {start|stop|restart|reload|condrestart|status|check}
+
+
+
+四、安装Keepalived(基于layer3, 4 & 5交换机制的软件)
+1.主节点安装配置keepalived(10.96.28.135)
+yum install -y keepalived
+
+
+vim /etc/keepalived/keepalived.conf
+
+
+! Configuration File for keepalived
+ global_defs { router_id redis44
+}
+vrrp_script chk_redis {
+	script "/etc/keepalived/scripts/check_haproxy.sh"
+	interval 2 
+	timeout 2 
+	fall 3
+}
+
+vrrp_instance redis { 
+	state BACKUP
+	interface bond0 
+	virtual_router_id 51 
+	priority 100
+	nopreempt 
+	advert_int 1 
+	authentication {
+		auth_type PASS
+		auth_pass 1111
+}
+
+virtual_ipaddress {
+	10.96.28.140
+} 
+
+track_script {
+	chk_redis
+	} 
+}
+
+
+mkdir -pv /etc/keepalived/scripts
+vim /etc/keepalived/scripts/check_haproxy.sh
+
+mkdir -pv /etc/keepalived/scripts
+vim /etc/keepalived/scripts/check_haproxy.sh
+
+#!/bin/bash
+#
+#chkconfig: 2345 80 90
+source /etc/init.d/functions
+
+haproxy_num=$(ps -C haproxy --no-header |wc -l)
+exec="/etc/init.d/haproxy"
+kexec="/etc/init.d/keepalived"
+
+if [ $(haproxy_num) -eq 0 ];then 
+	$exec restart 	&&	echo "$exec status"
+	sleep 5
+	if [ $(haproxy_num) -eq 0 ];then
+			$kexec stop && echo -e  "\033[32m Keepalived is Stop!\033[0m"
+	fi
+fi
+
+#记录所有错误及标准输出到keepalived中
+exec 3>&1 4>&2 1>> ./keepalived_`date +%Y%m%d`.log 2>&1
+
+
+dos2unix /etc/keepalived/scripts/check_haproxy.sh
+chmod +x /etc/keepalived/scripts/check_haproxy.sh
+
+/etc/init.d/keepalived start
+
+
+2.从节点安装配置keepalived(10.96.28.136)
+yum install -y keepalived
+
+vim /etc/keepalived/keepalived.conf
+
+! Configuration File for keepalived
+ global_defs { router_id redis44
+}
+vrrp_script chk_redis {
+	script "/etc/keepalived/scripts/check_haproxy.sh"
+	interval 2 
+	timeout 2 
+	fall 3
+}
+
+vrrp_instance redis { 
+	state BACKUP
+	interface bond0 
+	virtual_router_id 51 
+	priority 90
+	nopreempt 
+	advert_int 1 
+	authentication {
+		auth_type PASS
+		auth_pass 1111
+}
+
+virtual_ipaddress {
+	10.96.28.140
+} 
+track_script {
+	chk_redis
+	} 
+}
+
+
+mkdir -pv /etc/keepalived/scripts
+vim /etc/keepalived/scripts/check_haproxy.sh 
+
+#!/bin/bash
+#
+#chkconfig: 2345 80 90
+source /etc/init.d/functions
+
+haproxy_num=$(ps -C haproxy --no-header |wc -l)
+exec="/etc/init.d/haproxy"
+kexec="/etc/init.d/keepalived"
+
+
+if [ $(haproxy_num) -eq 0 ];then 
+	$exec restart 	&&	echo "$exec status"
+	sleep 5
+	if [ $(haproxy_num) -eq 0 ];then
+			$kexec stop && echo -e  "\033[32m Keepalived is Stop!\033[0m"
+	fi
+fi
+
+#记录所有错误及标准输出到keepalived中
+exec 3>&1 4>&2 1>> ./keepalived_`date +%Y%m%d`.log 2>&1
+
+
+dos2unix /etc/keepalived/scripts/check_haproxy.sh
+chmod +x /etc/keepalived/scripts/check_haproxy.sh
+
+
+/etc/init.d/keepalived start

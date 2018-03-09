@@ -1,0 +1,544 @@
+
+一、Redis Cluster 安装前准备
+1.centos上安装访问redis的python客户端 
+yum install epel-release
+yum install -y python-pip 
+pip install redis
+
+
+2.centos 使用python访问redis 
+# python
+import redis
+conn = redis.Redis(host='127.0.0.1',port=6379) 
+conn.set('name1','test')
+True
+
+conn.get('name')
+'junxi'
+
+
+
+3.源码安装单节点redis
+yum install -y gcc make
+curl -O http://download.redis.io/releases/redis-4.0.8.tar.gz 
+tar -zxvf redis-4.0.8.tar.gz
+cd redis-4.0.8
+make install
+mkdir -pv /opt/redis/{logs,data,tmp,conf}
+cp redis.conf  sentinel.conf  /opt/redis/conf/
+
+
+二、Redis Cluster安装
+1.1.3 yum 安装单节点 redis
+1.1.3.1 安装 安装 epel 源
+# yum install -y epel-release 安装 redis
+# yum install -y redis
+
+
+1.1.4 centos机器上,源码安装 redis cluster 测试系统
+1.1.4.1 安装 redis # yum install -y gcc make
+# curl -O http://download.redis.io/releases/redis-4.0.6.tar.gz # tar -zxvf redis-4.0.6.tar.gz
+# cd redis-4.0.6
+# make install
+# cp redis-4.0.2/src/redis-trib.rb /usr/local/bin/
+# cp /usr/local/bin/redis-* /usr/bin/
+
+
+1.1.4.2 安装 ruby 软件包—目前在线安装
+# gpg2 --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 
+# curl -L get.rvm.io | bash -s stable 		#curl报错有可能是没有安装或者需要更新yum update nss
+# curl -L get.rvm.io | bash -s stable 		#可能会失败
+# curl -sSL https://rvm.io/mpapis.asc | gpg2 --import -  	#执行失败之后执行这条在线下载导入RSA证书
+# curl -L get.rvm.io | bash -s stable  		#再继续执行
+# source /etc/profile.d/rvm.sh 				#完成会后source rvm脚本
+# source /usr/local/rvm/scripts/rvm
+查看 rvm 中的 ruby 版本,需要安装 2.2.2 以上的版本
+# rvm list known
+# rvm install 2.3.4
+查看 ruby 版本
+# ruby --version
+# gem install redis
+
+
+
+1.1.4.3  redis cluster 安装
+	1).创建实例目录
+	mkdir -pv /opt/redis/{logs,data,tmp,conf}
+
+	2).修改redis.conf 配置文件
+	vim /opt/redis/conf/6379.conf
+
+cat >/opt/redis/conf/6379.conf<<-EOF
+bind 0.0.0.0
+dir /opt/redis/data
+port 6379
+daemonize yes
+appendonly yes 
+requirepass 123456
+masterauth 123456
+logfile "/opt/redis/logs/6379.log"
+cluster-enabled yes
+cluster-config-file 6379.conf 
+cluster-node-timeout 5000 
+cluster-require-full-coverage no
+cluster-slave-validity-factor 10
+cluster-migration-barrier 1
+cluster-require-full-coverage yes
+EOF
+
+#/etc/init.d/redis6379 start|status|stop|restart    (启动脚本)
+
+
+#打印集群信息
+redis-cli  -c -h 10.96.28.135 -a 123456 cluster info 		(默认端口)
+redis-cli  -c -h 10.96.28.136 -a 123456 cluster info
+redis-cli  -c -h 10.96.28.137 -a 123456 cluster info
+
+#在第一个节点上,为每个节点分配 slot
+#给集群分配存储槽(slot)
+#redis 共有 16384 个 slot;这里第一个节点是 0-5460,第二个节点是 5461-10922,第三个节点是 10923-16383; 
+	redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster addslots {0..5460}
+	redis-cli -c -h 10.96.28.136 -p 6379 -a 123456 cluster addslots {5461..10922}
+	redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 cluster addslots {10923..16383}
+
+
+#在第一个节点上,为每个节点分配 epoch
+这个只在第一次创建 redis cluster 用到
+	redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster set-config-epoch 1 
+	redis-cli -c -h 10.96.28.136 -p 6379 -a 123456 cluster set-config-epoch 2 
+	redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 cluster set-config-epoch 3 
+
+
+#在第一个节点上,执行 cluster meet 让第一个 node 与其他 node 互联(其他节点之间的互联,通过 cluster 的通讯来实现)
+	redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster meet 10.96.28.136 6379
+	redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster meet 10.96.28.137 6379
+
+
+#在第一个节点上,查看 cluster 的状态
+	redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster info
+
+
+#在第一个节点上,查看集群节点的状态
+	redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes
+
+
+
+
+三、为Redis Cluster 添加slave/replicas节点;避免主节点挂了导致整个redis不可用
+	
+1.10.96.28.135节点上创建端口号为6380的redis实例(添加为6379端口实例的slave)
+	1).创建实例目录
+	mkdir -pv /opt/redis1/{conf,data,logs,tmp}
+
+	2).修改/etc/redis.conf 配置文件
+	vim /opt/redis1/conf/6380.conf
+
+cat >/opt/redis1/conf/6380.conf<<-EOF
+bind 0.0.0.0
+dir /opt/redis1/data
+port 6380
+daemonize yes
+appendonly yes
+requirepass 123456
+masterauth 123456
+logfile "/opt/redis1/logs/6380.log"
+cluster-enabled yes
+cluster-config-file 6380.conf
+cluster-node-timeout 5000
+cluster-require-full-coverage no
+cluster-slave-validity-factor 10
+cluster-migration-barrier 1
+cluster-require-full-coverage yes
+EOF
+
+#/etc/init.d/redis6380 start|status|stop|restart    (启动脚本)
+
+	3).将此节点加入现有 redis 集群
+	 redis-cli -c -h 10.96.28.135 -p 6380 -a 123456 cluster meet 10.96.28.135 6379
+
+	4).将10.96.28.135 6380作为10.96.28.135 6379的 replicas(副本集)
+		1.获取10.96.28.135 6379的 node id
+		  nodeid=$(redis-cli  -h 10.96.28.135 -p 6379 -a 123456 cluster nodes|grep 10.96.28.135|grep 6379|awk '{print $1}')
+
+		2.设置10.96.28.135 6380作为10.96.28.135 6379的 replicas 节点
+		  redis-cli -c -h 10.96.28.135 -p 6380 -a 123456 cluster replicate $nodeid
+
+	5).查看 redis 的 cluster 节点信息
+	  redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes
+
+	6).查看 redis 主从复制状态
+	在主 redis(10.96.28.135)上查看复制信息
+	  redis-cli -c -h 10.96.28.135 -a 123456 info replication
+
+
+
+
+四、新增和删除节点(Node)
+1.新增redis node
+	#将此节点加入现有 redis 集群
+		redis-cli -c -h 10.96.28.136 -p 6380 -a 123456 cluster meet 10.96.28.135 6379
+
+
+	#此时10.96.28.136 6380,无 hash slot
+		redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes
+
+	#测试,设置的 key 被转到其他节点(在节点1机器上)
+	redis-cli -c -h localhost -a 123456
+	localhost:6379> set hello1 world
+	-> Redirected to slot [11613] located at 10.96.28.137:6379
+
+
+	#迁移 hash slot(计划将 hash slot 为 11613 迁移到新节点)
+	  #查看 11613 的 slot 位于哪个节点,获取其 nodeid
+	  redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes
+
+	#获取 11613 的 hash slot 的源 nodeid
+		sourcenodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes|grep 10.96.28.137|awk '{print $1}')
+
+	#在新增的节点上,执行 hash slot 的 importing 操作
+		redis-cli -c -h 10.96.28.136 -p 6380 -a 123456 cluster setslot 11613 importing $sourcenodeid
+
+
+	#获取新建节点的 nodeid(需要在 10.96.28.137 6379节点上执行)
+		destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.136 |grep 6380 |awk '{print $1}')
+
+	#在11613 slot的源节点上(10.96.28.137 6379),执行 hash slot 的 migrating 操作
+		redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 cluster setslot 11613 migrating $destinationnodeid
+
+
+	#将 11613的slot中的key迁移到新节点上(关闭新节点的 protected-mode;需要在 10.96.28.137 6379节点上执行)
+	[root@testDB03 ~]# redis-cli -c -h localhost -a 123456
+	localhost:6379> config set protected-mode no
+	OK
+	localhost:6379> config rewrite
+	OK
+	localhost:6379>
+
+
+	#查看11613的slot中,有多少个key(在任意节点上都可以执行)
+		redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 cluster countkeysinslot 11613 
+		(integer) 1 		#这里表示只有1个key
+
+	#查看key的名称
+		redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 cluster getkeysinslot 11613 1 
+		1) "hello1"
+
+	#再11613的源节点上,将key迁移到新节点
+		redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 migrate 10.96.28.136 6380 hello1 0 2000 
+			.这里需要手动将10.96.28.136 6380的masterauth认证,暂时更改成为空'' (config set requirepass '');否则会报错认证错误((error) ERR Target instance replied with error: NOAUTH Authentication required.)
+
+	#在所有的redis主节点上,更新11613的slot已迁移到新节点上
+		destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.136 |grep 6380 |awk '{print $1}')
+		redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster setslot 11613 node $destinationnodeid
+
+		destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.136 |grep 6380 |awk '{print $1}')
+		redis-cli -c -h 10.96.28.136 -p 6379 -a 123456 cluster setslot 11613 node $destinationnodeid
+
+		destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.136 |grep 6380 |awk '{print $1}')
+		redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 cluster setslot 11613 node $destinationnodeid
+
+		destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.136 |grep 6380 |awk '{print $1}')
+		redis-cli -c -h 10.96.28.136 -p 6380 -a 123456 cluster setslot 11613 node $destinationnodeid
+
+
+	#更改后的hash slot分布情况
+	[root@testDB01 ~]# redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes
+	9d40f1bb82b12ba9458ddfe799a013279859c913 10.96.28.135:6379@16379 myself,master - 0 1520506116000 1 connected 0-5460
+	2b7615712429b8c41b847d7aea6454c432f48a3c 10.96.28.136:6380@16380 master - 0 1520506116014 4 connected 11613
+	e88b2596fed31771c587c11f6c6ed0f9dd5cc4a4 10.96.28.136:6379@16379 master - 0 1520506115512 2 connected 5461-10922
+	791a520a75d0615f6f22961c5bdfea87859afa51 10.96.28.137:6379@16379 master - 0 1520506116514 3 connected 10923-11612 11614-16383
+	72d5f76c71f5b7df3d7b151ceacfcb342930dfba 10.96.28.135:6380@16380 slave 9d40f1bb82b12ba9458ddfe799a013279859c913 0 1520506117015 1 connected
+
+
+
+2.删除redis node
+	1).查看要删除的node下有哪些slot
+	[root@testDB01 ~]# redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep '10.96.28.136' |grep 6380
+	2b7615712429b8c41b847d7aea6454c432f48a3c 10.96.28.136:6380@16380 master - 0 1520506438612 4 connected 11613
+	
+	#这里10.96.28.136 6380;只有1个11613的hash slot
+
+
+
+	2).迁移node下所有的hash slot(这里以11613的slot为例:获取11613的hash slot的源nodeid)
+	 sourcenodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes|grep 10.96.28.136|grep 6380|awk '{print $1}')
+
+	3).在要迁移到的目标节点(10.96.28.137 6379)上,执行hash slot的importing操作
+	 redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 cluster setslot 11613 importing $sourcenodeid
+
+
+	4).获取 11613 的 slot 目标节点 nodeid(这里目标节点是:10.96.28.137 6379)
+	  destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.137 |awk '{print $1}')
+	
+	5).在 11613 slot 的源节点(10.96.28.136 6380)上,执行 hash slot 的 migrating 操作
+	 redis-cli -c -h 10.96.28.136 -p 6380 cluster setslot 11613 migrating $destinationnodeid 
+	  
+	  #这里的(10.96.28.136 6380)上,redis 没有配置密码,所以没有-a 参数
+
+
+	6).将11613的slot中的key迁移到新节点上
+		a.关闭(10.96.28.137 6379)的 protected-mode,并禁用密码
+		redis-cli -c -h 10.96.28.137 -p 6379 -a 123456
+
+		b.关闭 protected-mode,允许远程无密码登录
+		10.96.28.137:6379> config set protected-mode no
+		
+		c.禁用密码
+		10.96.28.137:6379> config set requirepass ""
+		
+
+		d.在11613 的源节点(10.96.28.136 6380)上,将 key 迁移到新节点(10.96.28.137 6379)
+		 redis-cli -c -h 10.96.28.136 -p 6380 migrate 10.96.28.137 6379 hello1 0 2000
+
+
+
+	7).在所有的 redis 主节点上,更新 11613 的 slot 已迁移到新节点上
+	destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.137 |awk '{print $1}')
+	redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster setslot 11613 node $destinationnodeid
+
+	destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.137 |awk '{print $1}')
+	redis-cli -c -h 10.96.28.136 -p 6379 -a 123456 cluster setslot 11613 node $destinationnodeid
+
+	destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.137 |awk '{print $1}')
+	redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 cluster setslot 11613 node $destinationnodeid
+
+	destinationnodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.137 |awk '{print $1}')
+	redis-cli -c -h 10.96.28.136 -p 6380 -a 123456 cluster setslot 11613 node $destinationnodeid 
+		
+		#此时查看最后执行的一条(10.96.28.136 -p 6380 -a 123456)报错,(10.96.28.136 -p 6380 -a 123456)已经不再是master节点 --------(error) ERR Please use SETSLOT only with masters.
+		#通过查看Redis-Cluster集群信息(10.96.28.136 6380)节点已经转变为,Slave节点了
+
+
+	8).更改后的 hash slot 分布情况
+ 	 redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes
+
+
+	9).在所有的节点上,删除此(10.96.28.136 6380)nodes
+	注意:被删除的节点上不需执行 cluster forget <nodeid>,其他的所有节点都需要,包括 master 和 slave 节点;否 则删除后又会被同步,以致无法删除
+	deletenodeid=$(redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes |grep 10.96.28.136|grep 6380 |awk '{print $1}')
+	redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster forget $deletenodeid 
+	redis-cli -c -h 10.96.28.136 -p 6379 -a 123456 cluster forget $deletenodeid 
+	redis-cli -c -h 10.96.28.137 -p 6379 -a 123456 cluster forget $deletenodeid 
+
+	10).查看redis cluster是否删除了(10.96.28.136 6380)
+	  redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 cluster nodes
+
+	  	#最终结论(10.96.28.136 6380)节点没有被删除,反而变成了(10.96.28.136 6379)的从节点
+
+
+
+
+五、安装配置Haproxy
+1.安装HAproxy
+tar xf haproxy-1.7.0.tar.gz
+cd haproxy-1.7.0
+make TARGET=linux26 PREFIX=/usr/local/haproxy                                
+make install PREFIX=/usr/local/haproxy 		#将haproxy安装到/usr/local/haproxy
+
+2.配置HAproxy
+mkdir -pv /usr/local/haproxy/{conf,tmp}
+vim /usr/local/haproxy/conf/haproxy.cfg
+
+global
+    log 		127.0.0.1 local0
+    maxconn 	3000
+    chroot 		/usr/local/haproxy
+    uid 		99
+    gid 		99
+    daemon
+    quiet
+    nbproc 		1
+    pidfile 	/usr/local/haproxy/tmp/haproxy.pid
+
+defaults
+    log     	global
+    mode   		http
+    option  	httplog
+    option  	dontlognull
+    log 		127.0.0.1 local3 info
+    retries 	3
+    option 		redispatch
+    maxconn 	4096
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         5000ms
+    timeout client          50000ms
+    timeout server          50000ms
+    timeout http-keep-alive 10s
+    timeout check           10s
+
+
+listen cluster
+   bind 0.0.0.0:6381
+   mode tcp
+   balance roundrobin
+   option forwardfor
+   server redism1 10.96.28.135 check port 6379 inter 2s rise 3 fall 3 weight 1
+   server redism2 10.96.28.136 check port 6379 inter 2s rise 3 fall 3 weight 1
+   server redism3 10.96.28.137 check port 6379 inter 2s rise 3 fall 3 weight 1
+
+listen localhost
+   bind 0.0.0.0:8888
+   mode http
+   transparent
+   stats refresh 10s
+   stats uri /haproxyadmin
+   stats realm Haproxy \ statistic
+   stats auth admin:123456
+   stats hide-version
+
+
+
+3.加上日志支持
+vim /etc/rsyslog.conf
+local3.*         /var/log/haproxy.log
+local0.*         /var/log/haproxy.log
+
+vim /etc/sysconfig/rsyslog 
+修改： SYSLOGD_OPTIONS="-r -m 0"  
+service rsyslog restart
+
+4.haproxy启动脚本
+/etc/init.d/haproxy 		Usage: haproxy {start|stop|restart|reload|condrestart|status|check}
+
+
+
+六、安装Keepalived(基于layer3, 4 & 5交换机制的软件)
+1.主节点安装配置keepalived(10.96.28.135)
+yum install -y keepalived
+
+
+vim /etc/keepalived/keepalived.conf
+
+
+! Configuration File for keepalived
+ global_defs { router_id redis44
+}
+vrrp_script chk_redis {
+	script "/etc/keepalived/scripts/check_haproxy.sh"
+	interval 2 
+	timeout 2 
+	fall 3
+}
+
+vrrp_instance redis { 
+	state BACKUP
+	interface bond0 
+	virtual_router_id 51 
+	priority 100
+	nopreempt 
+	advert_int 1 
+	authentication {
+		auth_type PASS
+		auth_pass 1111
+}
+
+virtual_ipaddress {
+	10.96.28.140
+} 
+
+track_script {
+	chk_redis
+	} 
+}
+
+
+mkdir -pv /etc/keepalived/scripts
+vim /etc/keepalived/scripts/check_haproxy.sh
+
+mkdir -pv /etc/keepalived/scripts
+vim /etc/keepalived/scripts/check_haproxy.sh
+
+#!/bin/bash
+#
+#chkconfig: 2345 80 90
+source /etc/init.d/functions
+
+haproxy_num=$(ps -C haproxy --no-header |wc -l)
+exec="/etc/init.d/haproxy"
+kexec="/etc/init.d/keepalived"
+
+if [ $(haproxy_num) -eq 0 ];then 
+	$exec restart 	&&	echo "$exec status"
+	sleep 5
+	if [ $(haproxy_num) -eq 0 ];then
+			$kexec stop && echo -e  "\033[32m Keepalived is Stop!\033[0m"
+	fi
+fi
+
+#记录所有错误及标准输出到keepalived中
+exec 3>&1 4>&2 1>> ./keepalived_`date +%Y%m%d`.log 2>&1
+
+
+dos2unix /etc/keepalived/scripts/check_haproxy.sh
+chmod +x /etc/keepalived/scripts/check_haproxy.sh
+
+/etc/init.d/keepalived start
+
+
+2.从节点安装配置keepalived(10.96.28.136)
+yum install -y keepalived
+
+vim /etc/keepalived/keepalived.conf
+
+! Configuration File for keepalived
+ global_defs { router_id redis44
+}
+vrrp_script chk_redis {
+	script "/etc/keepalived/scripts/check_haproxy.sh"
+	interval 2 
+	timeout 2 
+	fall 3
+}
+
+vrrp_instance redis { 
+	state BACKUP
+	interface bond0 
+	virtual_router_id 51 
+	priority 90
+	nopreempt 
+	advert_int 1 
+	authentication {
+		auth_type PASS
+		auth_pass 1111
+}
+
+virtual_ipaddress {
+	10.96.28.140
+} 
+track_script {
+	chk_redis
+	} 
+}
+
+
+mkdir -pv /etc/keepalived/scripts
+vim /etc/keepalived/scripts/check_haproxy.sh 
+
+#!/bin/bash
+#
+#chkconfig: 2345 80 90
+source /etc/init.d/functions
+
+haproxy_num=$(ps -C haproxy --no-header |wc -l)
+exec="/etc/init.d/haproxy"
+kexec="/etc/init.d/keepalived"
+
+
+if [ $(haproxy_num) -eq 0 ];then 
+	$exec restart 	&&	echo "$exec status"
+	sleep 5
+	if [ $(haproxy_num) -eq 0 ];then
+			$kexec stop && echo -e  "\033[32m Keepalived is Stop!\033[0m"
+	fi
+fi
+
+#记录所有错误及标准输出到keepalived中
+exec 3>&1 4>&2 1>> ./keepalived_`date +%Y%m%d`.log 2>&1
+
+
+dos2unix /etc/keepalived/scripts/check_haproxy.sh
+chmod +x /etc/keepalived/scripts/check_haproxy.sh
+
+
+/etc/init.d/keepalived start

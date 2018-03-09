@@ -1,0 +1,133 @@
+#!/bin/bash
+#
+# chkconfig: - 85 15
+# description: HA-Proxy is a TCP/HTTP reverse proxy which is particularly suited for high availability environments.
+# processname: haproxy
+# config: /usr/local/haproxy/conf/haproxy.cfg
+# pidfile: /usr/local/haproxy/tmp/haproxy.pid
+
+# Script Author: Simon Matter <simon.matter@invoca.ch>
+# Version: 2004060600
+
+# Source function library.
+if [ -f /etc/init.d/functions ]; then
+  . /etc/init.d/functions
+elif [ -f /etc/rc.d/init.d/functions ] ; then
+  . /etc/rc.d/init.d/functions
+else
+  exit 0
+fi
+
+# Source networking configuration.
+. /etc/sysconfig/network
+
+# Check that networking is up.
+[ ${NETWORKING} = "no" ] && exit 0
+
+cfgfile="/usr/local/haproxy/conf/haproxy.cfg"
+pidfile="/var/run/haproxy.pid"
+lockfile="/var/lock/subsys/haproxy"
+exec="/usr/local/haproxy/sbin/haproxy"
+
+
+# This is our service name
+BASENAME=`basename $0`
+if [ -L $0 ]; then
+  BASENAME=`find $0 -name $BASENAME -printf %l`
+  BASENAME=`basename $BASENAME`
+fi
+
+[ -f $cfgfile ] || exit 1
+
+RETVAL=0
+
+
+start() {
+  $exec -c -q -f $cfgfile
+  if [ $? -ne 0 ]; then
+    echo "Errors found in configuration file, check it with '$BASENAME check'."
+    return 1
+  fi
+
+  echo -n "Starting $BASENAME: "
+  daemon $exec -D -f $cfgfile -p $pidfile
+  RETVAL=$?
+  echo
+  [ $RETVAL -eq 0 ] && touch $lockfile
+  return $RETVAL
+}
+
+stop() {
+  echo -n "Shutting down $BASENAME: "
+  killproc $BASENAME -USR1
+  RETVAL=$?
+  echo
+  [ $RETVAL -eq 0 ] && rm -f $lockfile
+  [ $RETVAL -eq 0 ] && rm -f $pidfile
+  return $RETVAL
+}
+
+restart() {
+  $exec -c -q -f $cfgfile
+  if [ $? -ne 0 ]; then
+    echo "Errors found in configuration file, check it with '$BASENAME check'."
+    return 1
+  fi
+  stop
+  start
+}
+
+reload() {
+  $exec -c -q -f $cfgfile
+  if [ $? -ne 0 ]; then
+    echo "Errors found in configuration file, check it with '$BASENAME check'."
+    return 1
+  fi
+  $exec -D -f $cfgfile -p $pidfile -sf $(cat $pidfile)
+}
+
+check() {
+  $exec -c -q -V -f $cfgfile
+}
+
+rhstatus() {
+	if [ -f $lockfile ];then
+		echo -e  "\033[32m Haproxy is running!\033[0m"
+	else
+		echo -e  "\033[32m Haproxy is Dead!\033[0m"
+	fi
+}
+
+condrestart() {
+  [ -e $lockfile ] && restart || :
+}
+
+# See how we were called.
+case "$1" in
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  restart)
+    restart
+    ;;
+  reload)
+    reload
+    ;;
+  condrestart)
+    condrestart
+    ;;
+  status)
+    rhstatus
+    ;;
+  check)
+    check
+    ;;
+  *)
+    echo $"Usage: $BASENAME {start|stop|restart|reload|condrestart|status|check}"
+    exit 1
+esac
+ 
+exit $?
