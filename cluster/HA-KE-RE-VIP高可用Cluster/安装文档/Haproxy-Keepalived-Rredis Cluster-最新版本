@@ -226,7 +226,8 @@ defaults
     retries 3
     timeout connect     3000
     timeout client      50000
-    timeout server 50000
+    timeout server      50000
+    maxconn             4096
 
 listen admin_stat
         bind 0.0.0.0:8888
