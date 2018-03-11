@@ -113,8 +113,7 @@ redis-trib.rb create --replicas 1 10.96.28.135:6379 10.96.28.135:6380 10.96.28.1
     redis-cli -c -h 10.96.28.135 -p 6379 
 
     #写100个数据观查三个节点上的分布情况:(正常情况下数据会分批写入不通的master上)
-    for ((i=0; i<100; ++i)); do redis-cli -c -h 172.26.0.20 -p 7000 set zst$i "The Best MySQL edu at
-zhishutang.com :)" ; done
+    for ((i=0;i<10000;++i));do redis-cli -c -h 10.96.28.140 -p 6370 set zst$i "The Best MySQL edu at zhishutang.com :)";done
 
 
 
@@ -204,52 +203,47 @@ mkdir -pv /usr/local/haproxy/{conf,tmp}
 vim /usr/local/haproxy/conf/haproxy.cfg
 
 global
-    log 		127.0.0.1 local0
-    maxconn 	3000
-    chroot 		/usr/local/haproxy
-    uid 		99
-    gid 		99
+    log 127.0.0.1   local0
+    log 127.0.0.1   local1 notice
+    #log loghost    local0 info
+    maxconn 50000
+    chroot      /var/lib/haproxy
+    pidfile     /var/run/haproxy.pid
+    uid 99
+    gid 99
     daemon
-    quiet
-    nbproc 		1
-    pidfile 	/usr/local/haproxy/tmp/haproxy.pid
+    nbproc 1
+    #debug
+    #quiet
 
 defaults
-    log     	global
-    mode   		http
-    option  	httplog
-    option  	dontlognull
-    log 		127.0.0.1 local3 info
-    retries 	3
-    option 		redispatch
-    maxconn 	4096
-    timeout http-request    10s
-    timeout queue           1m
-    timeout connect         5000ms
-    timeout client          50000ms
-    timeout server          50000ms
-    timeout http-keep-alive 10s
-    timeout check           10s
+    log     global
+    mode    tcp
+    option  tcplog
+    option  dontlognull
+    #option  forwardfor
+    option  redispatch
+    retries 3
+    timeout connect     3000
+    timeout client      50000
+    timeout server 50000
 
+listen admin_stat
+        bind 0.0.0.0:8888
+        mode http
+        stats refresh 30s
+        stats uri /admin?stats
+        stats realm Haproxy\ Statistics
+        stats auth admin:admin
+        stats enable
 
-listen cluster
-   bind 0.0.0.0:6381
-   mode tcp
-   balance roundrobin
-   option forwardfor
-   server redism1 10.96.28.135 check port 6379 inter 2s rise 3 fall 3 weight 1
-   server redism2 10.96.28.136 check port 6379 inter 2s rise 3 fall 3 weight 1
-   server redism3 10.96.28.137 check port 6379 inter 2s rise 3 fall 3 weight 1
-
-listen localhost
-   bind 0.0.0.0:8888
-   mode http
-   transparent
-   stats refresh 10s
-   stats uri /haproxyadmin
-   stats realm Haproxy \ statistic
-   stats auth admin:123456
-   stats hide-version
+listen  redis
+        bind *:6370
+        mode tcp
+        balance roundrobin
+        server redis1 10.96.28.135:6379 check inter 1s
+        server redis2 10.96.28.136:6379 check inter 1s
+        server redis3 10.96.28.137:6379 check inter 1s
 
 
 
