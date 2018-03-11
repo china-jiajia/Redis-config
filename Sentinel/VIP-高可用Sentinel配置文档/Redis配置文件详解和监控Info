@@ -1,0 +1,163 @@
+
+
+一、Redis配置文件详解
+
+vim /opt/redis/conf/redis.conf
+
+参数介绍:
+	daemonize yes: 是否以后台 daemon 方式运行。
+
+	pidfile pidfile /opt/redis/tmp/redis_6379.pid: 当 Redis 以守护进程方式运行时,Redis 默认会把 pid 写入 /var/run/redis.pid 文件,可以通过 pidfile 指定。
+
+	port 6379: 指定 Redis 监听端口,默认端口为 6379。
+
+	timeout 300: 当客户端闲置多长时间后关闭连接,如果指定为 0,表示关闭该功能。
+
+	loglevel verbose: 指定日志记录级别,Redis 总共支持四个级别:debug、verbose、 notice、warning,默认为 verbose。
+
+	Logfile :日志记录方式,默认为标准输出,可指定一个文件,将日志输出到这里。 
+
+	databases 16:设置开启数据库的数量,默认数据库为 0。
+
+	save保存数据下面的例子的意思是:
+		900 秒内如果至少有 1 个 key 的值变化,则保存
+		300 秒内如果至少有 10 个 key 的值变化,则保存
+		60 秒内如果至少有 10000 个 key 的值变化,则保存 
+
+		注意:也可以注释掉所有的save行来停用保存功能。save表示在一定时间内执行一 定数量的写操作时,自动保存快照。可设置多个条件。
+			#save 900 1
+			#save 300 10
+			#save 60 10000
+
+	rdbcompression yes:指定存储至本地数据库时是否压缩数据,默认为 yes,Redis 采用 LZF 压缩,如果为了节省 CPU 时间,可以关闭该选项,但会导致数据库文件变的巨大
+
+	dbfilename dump.rdb:数据快照文件名(只是文件名,不包括目录)
+
+	dir ./ 数据快照的保存目录(这个是目录)
+
+	slaveof 192.168.1.100 6379 设置当本机为 slave 服务时,设置 master 服务的 IP 地
+	址及端口,在 Redis 启动时,它会自动从 master 进行数据同步
+
+	appendonly no:是否开启 appendonlylog,开启的话每次写操作会记一条 log,
+	这会提高数据抗风险能力,但影响效率。Redis 在默认情况下是异步的把数据写入磁盘,如 果不开启,可能会在断电时导致一段时间内的数据丢失。因为 redis 本身同步数据文件是按 上面 save 条件来同步的,所以有的数据会在一段时间内只存在于内存中。默认为 no。
+
+	appendfilename appendonly.aof: 指定更新日志文件名,默认为 appendonly.aof
+
+	appendfsync everysec: 指定更新日志条件,共有 3 个可选值;no:表示等操作系统进行数据缓存同步到磁盘(快);always:表示每次更新操作后手动调用 fsync()将数据写到磁盘(慢,安全) everysec:表示每秒同步一次(折衷,默认值)
+
+	maxmemory 8G(算这个最大值的时候要乘以2来计算):指定 Redis 最大内存限制,Redis 在启动时会把数据加载到内存中,达 到最大内存后,Redis 会先尝试清除已到期或即将到期的Key,当此方法处理后,仍然到达最大内存设置,将无法再进行写入操作,但仍然可以进行读取操作。Redis新的vm机制,会把Key存放内存,Value会存放在swap区。
+		#Redis组数据持久化的时候,会在底层做一个镜像进程也会把当前数量的大小进行镜像复制(此时就产生了双倍的数据量)所以在Redis maxmemory设置的时候要计算下服务器内存是否够用
+
+	maxclients 128:设置同一时间最大客户端连接数,默认无限制,Redis可以同时打开的客户端连接数为Redis进程可以打开的最大文件描述符数,如果设置 maxclients 0,表示不作限制。当客户端连接数到达限制时,Redis会关闭新的连接并向客户端返回max number of clients reached错误信息。
+
+
+
+二、Redis 监控
+	1.首先判断客户端和服务器连接是否正常(客户端和服务器连接正常,返回 PONG)
+	redis> PING
+	PONG
+
+	2.客户端和服务器连接不正常(网络不正常或服务器未能正常运行),返回连接异常 redis 127.0.0.1:6379> PING
+	Could not connect to Redis at 127.0.0.1:6379: Connection refused
+
+	3.Redis 监控最直接的方法就是使用系统提供的 info 命令,只需要执行下面一条命令, 就能获得 Redis 系统的状态报告。
+	redis-cli info
+	结果会返回Server、Clients、Memory、Persistence、Stats、Replication、CPU、Keyspace8个部分。从info大返回结果中提取相关信息,就可以达到有效监控的目的
+
+	4.先解释下各个参数含义
+	Server:
+	 redis_version:2.8.8 
+	 redis_git_sha1:00000000 
+	 redis_git_dirty:0 
+	 redis_build_id:bf5d1747be5380f 
+	 redis_mode:standalone
+	 os:Linux 2.6.32-220.7.1.el6.x86_64 x86_64 
+	 arch_bits:64
+	 multiplexing_api:epoll
+	 gcc_version:4.4.7			#GCC版本
+	 process_id:49324 			#当前Redis服务器进程ID
+	 run_id:bbd7b17efcf108fdde285d8987e50392f6a38f48 
+	 tcp_port:6379
+	 uptime_in_seconds:1739082 	#运行时间(秒) 
+	 uptime_in_days:20 			#运行时间(天) 
+	 hz:10
+	 lru_clock:1734729 
+	 config_file:/home/s/apps/RedisMulti_video_so/conf/zzz.conf
+
+
+	 # Clients
+	 connected_clients:1  		#连接的客户端数量
+	 client_longest_output_list:0 
+	 client_biggest_input_buf:0 
+	 blocked_clients:0
+
+
+	 # Memory
+	 used_memory:821848 				#Redis分配的内存总量
+	 used_memory_human:802.59K 
+	 used_memory_rss:85532672 			#Redis分配的内存总量(包括内存碎片)
+	 used_memory_peak:178987632 
+	 used_memory_peak_human:170.70M		#Redis所用内存的高峰值 
+	 used_memory_lua:33792 
+	 mem_fragmentation_ratio:104.07 	#内存碎片比率
+	 mem_allocator:tcmalloc-2.0
+
+
+	 # Persistence
+	 loading:0 
+	 rdb_changes_since_last_save:0 			#上次保存数据库之后,执行命令的次数
+	 rdb_bgsave_in_progress:0 				#后台进行中的 save 操作的数量
+	 rdb_last_save_time:1410848505 			#最后一次成功保存的时间点,以 UNIX时间戳格式显示
+	 rdb_last_bgsave_status:ok 
+	 rdb_last_bgsave_time_sec:0 
+	 rdb_current_bgsave_time_sec:-1 
+	 aof_enabled:0 							#redis 是否开启了 aof
+	 aof_rewrite_in_progress:0 
+	 aof_rewrite_scheduled:0 
+	 aof_last_rewrite_time_sec:-1 
+	 aof_current_rewrite_time_sec:-1 
+	 aof_last_bgrewrite_status:ok 
+	 aof_last_write_status:ok
+
+
+	 # Stats
+	 total_connections_received:5705 		#运行以来连接过的客户端的总数量
+	 total_commands_processed:204013 		# 运行以来执行过的命令的总数量
+	 instantaneous_ops_per_sec:0 
+	 rejected_connections:0
+	 sync_full:0 sync_partial_ok:0 
+	 sync_partial_err:0 
+	 expired_keys:34401 					#运行以来过期的 key 的数量
+	 evicted_keys:0 						#运行以来删除过的 key 的数量
+	 keyspace_hits:2129 					#命中 key 的次数
+	 keyspace_misses:3148 					#没命中 key 的次数
+	 pubsub_channels:0 						#当前使用中的频道数量
+	 pubsub_patterns:0 						#当前使用中的模式数量
+	 latest_fork_usec:4391
+
+
+	 # Replication
+	 role:master 							#当前实例的角色 master 还是 slave
+	 connected_slaves:0 
+	 master_repl_offset:0 
+	 repl_backlog_active:0 
+	 repl_backlog_size:1048576 
+	 repl_backlog_first_byte_offset:0 
+	 repl_backlog_histlen:0
+
+	 # CPU
+	 used_cpu_sys:1551.61 
+	 used_cpu_user:1083.37 
+	 used_cpu_sys_children:2.52 
+	 used_cpu_user_children:16.79
+
+
+	 # Keyspace 
+	 db0:keys=3,expires=0,avg_ttl=0 		#各个数据库的key的数量,以及带有生存期的key的数量内存使用
+
+	 如果 Redis 使用的内存超出了可用的物理内存大小,那么 Redis 很可能系统会被杀掉。针对这一点,你可以通过 info 命令对used_memory和 used_memory_peak 进 行监控,为使用内存量设定阀值,并设定相应的报警机制。当然,报警只是手段,重要的是你得预先计划好,当内存使用量过大后,应该做些什么,是清除一些没用的冷数据,还是把 Redis 迁移到更强大的机器上去
+
+
+	持久化
+	如果因为你的机器或 Redis 本身的问题导致 Redis 崩溃了,那么你唯一的救命稻草 可能就是dump出来的rdb文件了,所以,对Redisdump 文件进行监控也是很重要的。 可以通过对 rdb_last_save_time进行监控,了解最近一次dump数据操作的时间,还可 以通过对 rdb_changes_since_last_save 进行监控来获得如果这时候出现故障,会丢失 (即已改变)多少数据。
+

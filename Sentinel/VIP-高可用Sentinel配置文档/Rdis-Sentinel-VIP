@@ -1,0 +1,339 @@
+
+一、Redis 安装:(数据写入实时性比较高)
+	数据结构服务器,Redis的所有数据都是保存在内存中,然后不定期的通过异步方式保存操磁盘上(这种成为"半持久化模式");也可以把每一次数据变化都写入到一个opppend only file(aof)里面(这称为"全持久化模式")
+
+	(1)、更新GCC(这里是使用了Redis最新版本所以需要升级GCC,也可以挑选低版本的Redis)
+	wget http://people.centos.org/tru/devtools-2/devtools-2.repo
+	mv devtools-2.repo /etc/yum.repos.d
+	yum install devtoolset-2-gcc devtoolset-2-binutils devtoolset-2-gcc-c++
+
+	mv /usr/bin/gcc /usr/bin/gcc-4.4.7
+	mv /usr/bin/g++ /usr/bin/g++-4.4.7
+	mv /usr/bin/c++ /usr/bin/c++-4.4.7
+	ln -s /opt/rh/devtoolset-2/root/usr/bin/gcc /usr/bin/gcc
+	ln -s /opt/rh/devtoolset-2/root/usr/bin/c++ /usr/bin/c++
+	ln -s /opt/rh/devtoolset-2/root/usr/bin/g++ /usr/bin/g++
+
+	gcc --version
+
+	(2)、安装ruby:
+
+	     tar xf ruby-2.5.0.tar.gz
+	     cd ruby-2.5.0.tar.gz
+	     ./configure && make && make install && echo $?
+
+	#添加ruby源
+	    gem sources -l
+	    gem sources --add http://gems.ruby-china.org/ --remove https://rubygems.org/
+
+	(3)、安装redis-4.0.8.tar.gz 
+
+	    tar xf redis-4.0.8.tar.gz  
+	    cd redis-4.0.8
+	    make && make install && echo $?
+
+	    mkdir -pv /opt/redis/{logs,data,tmp,conf}
+		cp redis.conf  sentinel.conf  /opt/redis/conf/
+
+	    cp redis-4.0.8/src/redis-trib.rb /usr/local/bin/
+	    cp /usr/local/bin/redis-* /usr/bin/
+
+		参数介绍:
+			.make install 命令执行完成后,会在redis-4.0.8/src/目录下生成本个可执行文件,分别是redis-server、redis-cli、redis-benchmark、redis-check-aof 、redis-check-dump, 它们的作用如下:
+				.redis-server: Redis 服务器的daemon启动程序
+				.redis-cli: Redis 命令行操作工具。也可以用 telnet 根据其纯文本协议来操作 
+				.redis-benchmark: Redis 性能测试工具,测试 Redis 在当前系统下的读写性能 
+				.redis-check-aof: 数据修复
+				.redis-check-dump: 检查导出工具
+
+
+		修改系统配置文件,执行命令
+			a) echo vm.overcommit_memory=1 >> /etc/sysctl.conf
+			b) sysctl vm.overcommit_memory=1 或执行 echo vm.overcommit_memory=1 >>/proc/sys/vm/overcommit_memory
+
+			使用数字含义: 
+				0,表示内核将检查是否有足够的可用内存供应用进程使用;如果有足够的可用内存,内存 申请允许;否则,内存申请失败,并把错误返回给应用进程。 1,表示内核允许分配所有的物理内存,而不管当前的内存状态如何。
+				2,表示内核允许分配超过所有物理内存和交换空间总和的内存
+
+		修改redis.conf 配置文件(配置文件大部分内容都相同,需要修改存储路径和守护端口号)
+		vim /opt/redis/conf/6379.conf
+
+cat >/opt/redis/conf/6379.conf<<-EOF
+daemonize yes
+pidfile /opt/redis/tmp/redis-6379.pid
+port 6379
+tcp-backlog 511
+timeout 0
+tcp-keepalive 0
+
+loglevel notice
+logfile "/opt/redis/logs/redis-6379.log"
+databases 16
+
+save 900 1
+save 300 10
+save 60 10000
+
+stop-writes-on-bgsave-error yes
+
+rdbcompression yes
+rdbchecksum yes
+dbfilename dump.rdb
+
+dir /opt/redis/data
+requirepass "123456"
+masterauth "123456"
+slave-serve-stale-data yes
+slave-read-only yes
+repl-diskless-sync no
+repl-diskless-sync-delay 5
+repl-disable-tcp-nodelay no
+slave-priority 100
+
+appendonly no
+appendfilename "appendonly.aof"
+appendfsync everysec
+no-appendfsync-on-rewrite no
+
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+aof-load-truncated yes
+
+lua-time-limit 5000
+slowlog-log-slower-than 10000
+slowlog-max-len 128
+latency-monitor-threshold 0
+notify-keyspace-events ""
+
+hash-max-ziplist-entries 512
+hash-max-ziplist-value 64
+list-max-ziplist-entries 512
+list-max-ziplist-value 64
+set-max-intset-entries 512
+zset-max-ziplist-entries 128
+zset-max-ziplist-value 64
+hll-sparse-max-bytes 3000
+
+activerehashing yes
+
+client-output-buffer-limit normal 0 0 0
+client-output-buffer-limit slave 256mb 64mb 60
+client-output-buffer-limit pubsub 32mb 8mb 60
+
+hz 10
+
+aof-rewrite-incremental-fsync yes
+EOF
+
+		/etc/init.d/redis6379 start|status|stop|restart    (启动脚本)
+
+
+
+二、高可用redis(Redis-Sentinel)部署 
+	1.环境描述
+		使用三台服务器,每台服务器上开启一个redis-server和redis-sentinel服务,redis-server端口为6379,redis-sentinel的端口为 26379,修改默认端口是安全的第一步。
+			10.96.28.135
+			10.96.28.136
+			10.96.28.137
+			A.三台机器上部署开启Sentinel进程
+			B.Redis的架构为主-从-从(从服务器上多出一项配置参数:slaveof 10.96.28.135 6379 从redis比主redis多这一行)
+
+	2.自动故障转移机制
+		1.虽然上面redis做了备份,看上去很完美。但由于redis目前只支持主从复制备份(不支持主主复制),当主redis挂了,从redis只能提供读服务,无法提供写服务。所以,还得想办法,当主redis挂了,让从redis升级成为主redis。
+		2.这就需要自动故障转移,redis sentinel带有这个功能,当一个主redis不能提供服务时,redis sentinel可以将一个从redis升级为主redis,并对其他从redis 进行配置,让它们使用新的主redis进行复制备份。
+		3.Redis-Sentinel 是Redis官方推荐的高可用性(HA)解决方案,当用Redis做Master-slave的高可用方案时,假如master宕机了,Redis本身(包括它的很多客户端)都 没有实现自动进行主备切换,而Redis-sentinel本身也是一个独立运行的进程,它能监控多个master-slave集群,发现master宕机后能进行自动切换。它的主要功能有以下几点
+			A.实时地监控redis是否按照预期良好地运行;
+			B.如果发现某个redis节点运行出现状况,能够通知另外一个进程(例如它的客户端);能够进行自动切换。
+			C.当一个master节点不可用时,能够选举出master的多个slave(如果有超过一个slave的话)中的一个来作为新的master,其它的slave节点会将它所追随的 master的地址改为被提升为master的slave的新地址。
+
+	3.安装redis-4.0.8.tar.gz(并配置Redis主从)
+
+	    tar xf redis-4.0.8.tar.gz  
+	    cd redis-4.0.8
+	    make && make install && echo $?
+
+	    mkdir -pv /opt/redis/{logs,data,tmp,conf,scripts}
+		cp redis.conf  sentinel.conf  /opt/redis/conf/
+
+	    cp redis-4.0.8/src/redis-trib.rb /usr/local/bin/
+	    cp /usr/local/bin/redis-* /usr/bin/
+
+		
+		#修改系统配置文件,执行命令
+		echo "vm.overcommit_memory=1" >>/etc/sysctl.conf
+		sysctl -p
+			
+			#sysctl vm.overcommit_memory=1 
+			#echo vm.overcommit_memory=1 >>/proc/sys/vm/overcommit_memory
+
+
+		#修改redis.conf 配置文件(配置文件大部分内容都相同,需要修改存储路径和守护端口号)
+		vim /opt/redis/conf/6379.conf
+
+cat >/opt/redis/conf/6379.conf<<-EOF
+daemonize yes
+pidfile /opt/redis/tmp/redis-6379.pid
+port 6379
+tcp-backlog 511
+timeout 0
+tcp-keepalive 0
+
+loglevel notice
+logfile "/opt/redis/logs/redis-6379.log"
+databases 16
+
+save 900 1
+save 300 10
+save 60 10000
+
+stop-writes-on-bgsave-error yes
+
+rdbcompression yes
+rdbchecksum yes
+dbfilename dump.rdb
+
+dir /opt/redis/data
+requirepass "123456"
+masterauth "123456"
+slave-serve-stale-data yes
+slave-read-only yes
+repl-diskless-sync no
+repl-diskless-sync-delay 5
+repl-disable-tcp-nodelay no
+slave-priority 100
+
+appendonly no
+appendfilename "appendonly.aof"
+appendfsync everysec
+no-appendfsync-on-rewrite no
+
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+aof-load-truncated yes
+
+lua-time-limit 5000
+slowlog-log-slower-than 10000
+slowlog-max-len 128
+latency-monitor-threshold 0
+notify-keyspace-events ""
+
+hash-max-ziplist-entries 512
+hash-max-ziplist-value 64
+list-max-ziplist-entries 512
+list-max-ziplist-value 64
+set-max-intset-entries 512
+zset-max-ziplist-entries 128
+zset-max-ziplist-value 64
+hll-sparse-max-bytes 3000
+
+activerehashing yes
+
+client-output-buffer-limit normal 0 0 0
+client-output-buffer-limit slave 256mb 64mb 60
+client-output-buffer-limit pubsub 32mb 8mb 60
+
+hz 10
+
+aof-rewrite-incremental-fsync yes
+EOF
+
+
+		#从服务器上需要多添加一项配置执行本地备份数据;来源自那台Master(slaveof 10.96.28.135 6379)
+
+		/etc/init.d/redis6379 start|status|stop|restart    (启动脚本)
+
+		三个redis服务启动完毕后,进入命令行,执行info replication查看当前主从配置。
+
+
+
+
+	(4).搭建redis-sentinel系统
+		redis-sentinel程序上面已经安装过了,这里只需要修改配置文件就可以了。修改/opt/redis/conf/26379.conf,如果没有创建即可。
+		vim /opt/redis/conf/26379.conf
+
+cat >/opt/redis/conf/26379.conf<<-EOF
+daemonize yes
+port 26379
+protected-mode no
+logfile /opt/redis/logs/redis-26379.log
+pidfile /opt/redis/tmp/sentinel.pid
+sentinel monitor master26379 10.96.28.135 26379 2 
+sentinel down-after-milliseconds master26379 5000 
+sentinel failover-timeout master26379 15000
+EOF
+
+
+	#三个redis-sentinel 服务启动完毕后,连接任意sentinel服务可以获知当前主redis服务信息。
+	/etc/init.d/redisentinel 	start|status|stop|restart    (启动脚本)
+
+
+
+二、Redis-Sentinel模拟故障切换及虚拟VIP配置
+	1.测试
+		把主redis停掉
+		redis-cli -c -h 10.96.28.135 -p 6379 -a 123456 shutdown
+
+	2.查看redis-sentinel的监控状态此时会发现,10.96.28.136这台redis-server提升为主库。至此,redis的高可用方案已经搭建完成。
+
+
+	3.客户端问题
+		客户端程序(如 PHP 程序)连接redis时需要ip和port,但redis-server进行故障转移时,主redis是变化的,所以ip地址也是变化的。客户端程序如何感知当前主 redis的ip地址和端口呢?
+		VIP 方案
+			1.VIP 方案是,redis 系统对外始终是同一ip地址,当redis进行故障转移时,需要做的是将VIP从之前的redis服务器漂移到现在新的主redis服务器上。
+			2.比如:当前redis系统中主redis的ip地址是10.96.28.135,那么 VIP(10.96.28.140)指向10.96.28.135,客户端程序用VIP(10.96.28.140)地址连接 redis,实际上连接的就是当前主redis,这样就避免了向sentinel发送请求。当主redis宕机,进行故障转移时,10.96.28.136这台服务器上的redis提升为主, 这时 VIP(10.96.28.140)指向10.96.28.136,这样客户端程序不需要修改任何代码,连接的是10.96.28.136这台主redis。
+
+
+	4.漂移 VIP
+	那么现在的问题是,如何在进行redis故障转移时,将VIP漂移到新的主redis服务器上。这里可以使用redis sentinel的一个参数client-reconfig-script,这个参数配置执行脚本,sentinel在做failover的时候会执行这个脚本,并且传递6个参数<master-name>、<role>、<state>、<from-ip>、<from-port>、<to-ip> 、<to-port>,其中<to-ip>是新主redis的IP地址,可以在这个脚本里做VIP漂移操作。
+
+	sentinel client-reconfig-script master6379 /opt/redis/scripts/notify_master6379.sh
+
+
+		(1).从新配置redis-sentinel配置文件添加新参数
+		vim /opt/redis/conf/26379.conf
+
+cat >/opt/redis/conf/26379.conf<<-EOF
+daemonize yes
+port 26379
+protected-mode no
+logfile /opt/redis/logs/redis-26379.log
+pidfile /opt/redis/tmp/sentinel.pid
+sentinel monitor master26379 10.96.28.135 26379 2 
+sentinel down-after-milliseconds master26379 5000 
+sentinel failover-timeout master26379 15000
+sentinel client-reconfig-script master6379 /opt/redis/scripts/notify_master6379.sh
+EOF
+
+		2.修改三个服务器的 redis-sentinel 配置文件/opt/redis/conf/26379.conf,增加上面一行。然后在/opt/redis/scripts/目录下创建notify_master6379.sh 脚本文件,这个脚本做 VIP 漂移操作, 内容如下:
+
+
+	 	vim /opt/redis/scripts/notify_master6379.sh
+
+#!/bin/bash
+MASTER_IP=$6 				#第六个参数是新主 redis 的 ip 地址
+LOCAL_IP=`ifconfig bond0|awk -F ":" 'NR==2{print $2}'|awk '{print $1}'` 	#其他两个服务器上为 172.16.213.233,172.16.213.232 
+VIP='10.96.28.140'
+NETMASK='24'
+INTERFACE='bond0'
+
+if [[ "${MASTER_IP}" == "${LOCAL_IP}" ]];then
+	/sbin/ip addr add ${VIP}/${NETMASK} dev ${INTERFACE}  &&         #将VIP绑定到该服务器上
+	/sbin/arping -q -c 3 -A ${VIP} -I ${INTERFACE}
+	exit 0 
+else
+	/sbin/ip addr del ${VIP}/${NETMASK} dev ${INTERFACE}		 #将VIP从该服务器上删除
+	exit 0
+fi
+
+exit 1
+
+
+	dos2unix /opt/redis/scripts/notify_master6379.sh
+	chmod +x /opt/redis/scripts/notify_master6379.sh
+
+	exit 1 		#如果返回 1,sentinel 会一直执行这个脚本
+	1.现在当前主redis是10.96.28.1435,第一次,需要手动绑定VIP到该服务器上。
+		/sbin/ip addr add 10.96.28.140/24 dev bond0
+		/sbin/arping -q -c 3 -A 10.96.28.140 -I bond0
+	2.然后,去另一个服务器上通过VIP地址测试连接redis-server和redis-sentinel。
+
