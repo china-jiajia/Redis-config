@@ -365,4 +365,7 @@ exit 1
 
 六、测试
 	#for循环写想VIP写入数据进行测试
-    for ((i=0;i<10000;++i));do redis-cli -c -h 10.96.28.140 -p 6370 -a 123456 set zst$i "The Best MySQL edu at zhishutang.com :)";done
+    for ((i=0;i<10000;++i));do redis-cli -c -h 10.96.28.140 -p 6379 -a 123456 set zst$i "The Best MySQL edu at zhishutang.com :)";done
+
+    #这里需要注意的是:
+    	1.VIP连接的是后端Redis-Master的端口;而不是Redis-Sentinel的端口(Sentinel是不支持redis命令的)
